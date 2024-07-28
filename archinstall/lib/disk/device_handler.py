@@ -398,7 +398,6 @@ class DeviceHandler(object):
 		debug(f'Creating LVM PVS: {cmd}')
 
 		worker = SysCommandWorker(cmd)
-		worker.poll()
 		worker.write(b'y\n', line_ending=False)
 
 	def lvm_vg_create(self, pvs: Iterable[Path], vg_name: str):
@@ -408,7 +407,6 @@ class DeviceHandler(object):
 		debug(f'Creating LVM group: {cmd}')
 
 		worker = SysCommandWorker(cmd)
-		worker.poll()
 		worker.write(b'y\n', line_ending=False)
 
 	def lvm_vol_create(self, vg_name: str, volume: LvmVolume, offset: Optional[Size] = None):
@@ -423,7 +421,6 @@ class DeviceHandler(object):
 		debug(f'Creating volume: {cmd}')
 
 		worker = SysCommandWorker(cmd)
-		worker.poll()
 		worker.write(b'y\n', line_ending=False)
 
 		volume.vg_name = vg_name

@@ -130,7 +130,6 @@ class SysCommandWorker:
 		self.exit_code :Optional[int] = None
 		self._trace_log = b''
 		self._trace_log_pos = 0
-		self.poll_object = epoll()
 		self.child_fd :Optional[int] = None
 		self.started :Optional[float] = None
 		self.ended :Optional[float] = None
@@ -162,7 +161,6 @@ class SysCommandWorker:
 		self._trace_log_pos = last_line
 
 	def __repr__(self) -> str:
-		self.make_sure_we_are_executing()
 		return str(self._trace_log)
 
 	def __str__(self) -> str:
@@ -201,35 +199,20 @@ class SysCommandWorker:
 			)
 
 	def is_alive(self) -> bool:
-		self.poll()
-
-		if self.started and self.ended is None:
-			return True
-
-		return False
+		return True
 
 	def write(self, data: bytes, line_ending :bool = True) -> int:
 		assert isinstance(data, bytes)  # TODO: Maybe we can support str as well and encode it
 
-		self.make_sure_we_are_executing()
-
 		if self.child_fd:
 			return os.write(self.child_fd, data + (b'\n' if line_ending else b''))
-			os.fsync(self.child_fd)
 
 		return 0
 
-	def make_sure_we_are_executing(self) -> bool:
-		if not self.started:
-			return self.execute()
-		return True
-
 	def tell(self) -> int:
-		self.make_sure_we_are_executing()
 		return self._trace_log_pos
 
 	def seek(self, pos :int) -> None:
-		self.make_sure_we_are_executing()
 		# Safety check to ensure 0 < pos < len(tracelog)
 		self._trace_log_pos = min(max(0, pos), len(self._trace_log))
 
@@ -257,33 +240,6 @@ class SysCommandWorker:
 			sys.stdout.flush()
 
 		return True
-
-	def poll(self) -> None:
-		self.make_sure_we_are_executing()
-
-		if self.child_fd:
-			got_output = False
-			for fileno, event in self.poll_object.poll(0.1):
-				try:
-					output = os.read(self.child_fd, 8192)
-					got_output = True
-					self.peak(output)
-					self._trace_log += output
-				except OSError:
-					self.ended = time.time()
-					break
-
-			if self.ended or (not got_output and not _pid_exists(self.pid)):
-				self.ended = time.time()
-				try:
-					wait_status = os.waitpid(self.pid, 0)[1]
-					self.exit_code = os.waitstatus_to_exitcode(wait_status)
-				except ChildProcessError:
-					try:
-						wait_status = os.waitpid(self.child_fd, 0)[1]
-						self.exit_code = os.waitstatus_to_exitcode(wait_status)
-					except ChildProcessError:
-						self.exit_code = 1
 
 	def execute(self) -> bool:
 		import pty
@@ -330,11 +286,18 @@ class SysCommandWorker:
 				return False
 		else:
 			# Only parent process moves back to the original working directory
+			_, wait_status = os.wait()
+
+			try:
+				while 1:
+					self._trace_log += os.read(self.child_fd, 4095)
+			except OSError:
+				pass
+
+			self.exit_code = os.waitstatus_to_exitcode(wait_status)
 			os.chdir(old_dir)
 
 		self.started = time.time()
-		self.poll_object.register(self.child_fd, EPOLLIN | EPOLLHUP)
-
 		return True
 
 	def decode(self, encoding :str = 'UTF-8') -> str:
@@ -420,9 +383,7 @@ class SysCommand:
 			working_directory=self.working_directory) as session:
 
 			self.session = session
-
-			while not self.session.ended:
-				self.session.poll()
+			self.session.execute()
 
 		if self.peek_output:
 			sys.stdout.write('\n')
@@ -458,13 +419,6 @@ class SysCommand:
 		if self.session:
 			return self.session._trace_log
 		return None
-
-
-def _pid_exists(pid: int) -> bool:
-	try:
-		return any(subprocess.check_output(['/usr/bin/ps', '--no-headers', '-o', 'pid', '-p', str(pid)]).strip())
-	except subprocess.CalledProcessError:
-		return False
 
 
 def run_custom_user_commands(commands :List[str], installation :Installer) -> None:
